@@ -1,72 +1,40 @@
-import 'dart:async';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tutorinsa/pages/Common/postdetailpage.dart';
-import 'package:tutorinsa/pages/Common/profilepage.dart';
 import 'package:tutorinsa/pages/Tutor/NavigationBar.dart';
 
-class TutorPostsPage extends StatefulWidget {
-  const TutorPostsPage({super.key});
+class TutorRDVPage extends StatefulWidget {
+  const TutorRDVPage({super.key});
 
   @override
-  _TutorPageState createState() => _TutorPageState();
+  _TutorRDVPageState createState() => _TutorRDVPageState();
 }
 
-class _TutorPageState extends State<TutorPostsPage> {
-  final TextEditingController _searchController = TextEditingController();
-  String _searchTerm = '';
-  int _selectedIndex = 0;
-  final List<String> _selectedTags = [];
-  String? _userName;
-  String? _userImage;
-  List<String> _userPreferences = [];
-
-  final List<String> _tags = [
-    'Mathématiques',
-    'Physique',
-    'Chimie',
-    'Biologie',
-    'Informatique',
-    'Histoire',
-    'Géographie',
-    'Anglais',
-    'Français',
-    'Espagnol'
-  ];
+class _TutorRDVPageState extends State<TutorRDVPage> {
+  int _selectedIndex = 2;
+  String? userId;
+  List<String> tutorSpecialities = [];
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    _loadUserIdAndSpecialities();
   }
 
-  Future<void> _loadUserData() async {
+  void _loadUserIdAndSpecialities() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
-    String? userId = prefs.getString('userId');
+    userId = prefs.getString('userId');
+
     if (userId != null) {
-      DocumentSnapshot userSnapshot = await FirebaseFirestore.instance
+      var userDoc = await FirebaseFirestore.instance
           .collection('Users')
           .doc(userId)
           .get();
-      if (userSnapshot.exists) {
-        setState(() {
-          _userName = userSnapshot['Prénom'];
-          _userImage = userSnapshot['Image'];
-          _userPreferences = List<String>.from(
-              (userSnapshot.data() as Map).containsKey('PreferredMatieres')
-                  ? userSnapshot['PreferredMatieres']
-                  : []);
-        });
-      }
-    }
-  }
 
-  void _updateSearchTerm(String value) {
-    setState(() {
-      _searchTerm = value.toLowerCase();
-    });
+      setState(() {
+        tutorSpecialities = List<String>.from(userDoc['Matieres']);
+      });
+    }
   }
 
   void _onItemTapped(int index) {
@@ -79,129 +47,157 @@ class _TutorPageState extends State<TutorPostsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const ui.Color(0xFF5F67EA),
-        automaticallyImplyLeading: false,
-        title: Text(
-          'Welcome, ${_userName ?? 'User'}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
+        title: const Text('Demandes de Rendez-vous'),
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
         ),
-        actions: <Widget>[
-          IconButton(
-            icon: _userImage != null
-                ? CircleAvatar(
-                    backgroundImage: NetworkImage(_userImage!),
-                  )
-                : const Icon(Icons.account_circle, size: 30),
-            tooltip: 'Profil de l\'utilisateur',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const ProfilePage(),
-                ),
-              );
+        backgroundColor: const Color(0xFF5F67EA),
+        automaticallyImplyLeading: false,
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('Rendezvous').snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final appointmentRequests = snapshot.data!.docs.where((request) {
+            final requestData = request.data() as Map<String, dynamic>;
+            final matiere = requestData['Matiere'];
+            return tutorSpecialities.contains(matiere);
+          }).toList();
+
+          return ListView.builder(
+            itemCount: appointmentRequests.length,
+            itemBuilder: (context, index) {
+              final request = appointmentRequests[index];
+
+              return FutureBuilder<DocumentSnapshot>(
+                  future: FirebaseFirestore.instance
+                      .collection('Users')
+                      .doc(request['InitiatedBy'])
+                      .get(),
+                  builder: (context, userSnapshot) {
+                    if (!userSnapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final user = userSnapshot.data;
+                    final userName = user?['Prénom'] ?? 'Prénom inconnu';
+
+                    return Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: ListTile(
+                          title: Text(userName),
+                          titleTextStyle: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Matière: ${request['Matiere']}'),
+                              Text('Date: ${request['Date']}'),
+                              Text('Heure: ${request['Time']}'),
+                            ],
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.check_circle,
+                                    color: Colors.green, size: 30),
+                                onPressed: () {
+                                  _acceptAppointment(request.id,
+                                      request.data() as Map<String, dynamic>, user?['Prénom']);
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.cancel,
+                                    color: Colors.red, size: 30),
+                                onPressed: () {
+                                  _showRefuseConfirmationDialog(request.id,
+                                      request.data() as Map<String, dynamic>);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  });
             },
+          );
+        },
+      ),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'accepted_rdv', // Unique heroTag
+            onPressed: () {
+              _navigateToAcceptedAppointments(context);
+            },
+            icon: const Icon(Icons.event_available),
+            label: const Text(
+              'Voir les RDV acceptés',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: const Color(0xFF5F67EA),
+          ),
+          const SizedBox(height: 10),
+          FloatingActionButton.extended(
+            heroTag: 'refused_rdv', // Unique heroTag
+            onPressed: () {
+              _navigateToRefusedAppointments(context);
+            },
+            icon: const Icon(Icons.cancel),
+            label: const Text(
+              'Voir les RDV refusés',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: const Color(0xFF5F67EA),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(10.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: 'Rechercher un post...',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: BorderSide.none,
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey.withOpacity(0.2),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.search),
-                          onPressed: () {
-                            _updateSearchTerm(_searchController.text);
-                          },
-                        ),
-                      ),
-                      onSubmitted: _updateSearchTerm,
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.filter_list),
-                    onPressed: _showTagFilterDialog,
-                  ),
-                ],
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(left: 0, top: 20.0),
-              child: Text(
-                'Les posts récents 🔥',
-                style: TextStyle(
-                  color: ui.Color.fromARGB(255, 0, 0, 0),
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            _buildPostsList(),
-          ],
-        ),
-      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       bottomNavigationBar: NavigationBar2(
         selectedIndex: _selectedIndex,
         onItemTapped: _onItemTapped,
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 
-  void _showTagFilterDialog() {
+  void _showRefuseConfirmationDialog(
+      String appointmentId, Map<String, dynamic> appointmentData) {
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (BuildContext context) {
         return AlertDialog(
-          title: const Text('Sélectionner les tags'),
-          content: StatefulBuilder(
-            builder: (context, setState) {
-              return SingleChildScrollView(
-                child: Column(
-                  children: _tags.map((tag) {
-                    return CheckboxListTile(
-                      title: Text(tag),
-                      value: _selectedTags.contains(tag),
-                      onChanged: (isSelected) {
-                        setState(() {
-                          if (isSelected!) {
-                            _selectedTags.add(tag);
-                          } else {
-                            _selectedTags.remove(tag);
-                          }
-                        });
-                      },
-                    );
-                  }).toList(),
-                ),
-              );
-            },
-          ),
-          actions: [
+          title: const Text('Refuser le rendez-vous'),
+          content:
+              const Text('Êtes-vous sûr de vouloir refuser ce rendez-vous ?'),
+          actions: <Widget>[
             TextButton(
+              child: const Text('Annuler'),
               onPressed: () {
-                setState(() {});
                 Navigator.of(context).pop();
               },
-              child: const Text('OK'),
+            ),
+            TextButton(
+              child: const Text('Je suis sûr'),
+              onPressed: () {
+                _refuseAppointment(appointmentId, appointmentData);
+                Navigator.of(context).pop();
+              },
             ),
           ],
         );
@@ -209,222 +205,289 @@ class _TutorPageState extends State<TutorPostsPage> {
     );
   }
 
-  Widget _buildPostsList() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('Posts').snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
+  void _acceptAppointment(String appointmentId, Map<String, dynamic> appointmentData, String? studentName) async {
+  await FirebaseFirestore.instance.collection('Rendezvousacceptes').add({
+    ...appointmentData,
+    'AcceptedBy': userId, // Ajoutez l'ID du tuteur qui accepte le rendez-vous
+  });
 
-        var documents = snapshot.data!.docs;
+  await FirebaseFirestore.instance.collection('Rendezvous').doc(appointmentId).delete();
 
-        // Filtre par titre et/ou tags
-        if (_searchTerm.isNotEmpty || _selectedTags.isNotEmpty) {
-          final searchTermLower = _searchTerm.toLowerCase();
-          documents = documents.where((doc) {
-            final title = doc['Titre']?.toString().toLowerCase() ?? '';
-            final tags = List<String>.from(doc['Tags'] ?? []);
+  // Obtenez l'ID de l'étudiant qui a initié le rendez-vous
+  final String studentId = appointmentData['InitiatedBy'];
 
-            // Vérifier si le titre contient le terme de recherche
-            bool titleMatches = title.contains(searchTermLower);
+  // Vérifiez si une conversation existe entre le tuteur et l'étudiant
+  QuerySnapshot existingConversations = await FirebaseFirestore.instance
+      .collection('conversations')
+      .where('participants', arrayContains: userId)
+      .get();
 
-            // Vérifier si l'un des tags est sélectionné
-            bool tagsMatch = false;
-            if (_selectedTags.isNotEmpty) {
-              for (var selectedTag in _selectedTags) {
-                if (tags.contains(selectedTag)) {
-                  tagsMatch = true;
-                  break;
-                }
-              }
-            } else {
-              tagsMatch = true; // Si aucun tag n'est sélectionné, ignorer cette vérification
-            }
+  DocumentSnapshot? conversationDoc;
+  for (var doc in existingConversations.docs) {
+    List<dynamic> participants = doc['participants'];
+    if (participants.contains(studentId)) {
+      conversationDoc = doc;
+      break;
+    }
+  }
 
-            return titleMatches && tagsMatch;
-          }).toList();
-        }
+  String conversationId;
+  if (conversationDoc == null) {
+    // Si aucune conversation n'existe, créez-en une nouvelle
+    DocumentReference newConversation = await FirebaseFirestore.instance.collection('conversations').add({
+      'participants': [userId, studentId],
+      'lastMessage': 'Ce tuteur a accepté votre demande de rendez-vous',
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+    conversationId = newConversation.id;
+  } else {
+    // Utilisez l'ID de la conversation existante
+    conversationId = conversationDoc.id;
+  }
 
-        var preferredDocs = documents.where((doc) {
-          final tags = List<String>.from(doc['Tags'] ?? []);
-          return _userPreferences.any((pref) => tags.contains(pref));
-        }).toList();
+  // Ajoutez le message à la conversation
+  await FirebaseFirestore.instance.collection('conversations').doc(conversationId).collection('messages').add({
+    'text': 'Ce tuteur a accepté votre demande de rendez-vous',
+    'senderId': userId,
+    'timestamp': FieldValue.serverTimestamp(),
+  });
 
-        var otherDocs = documents.where((doc) {
-          final tags = List<String>.from(doc['Tags'] ?? []);
-          return !_userPreferences.any((pref) => tags.contains(pref));
-        }).toList();
+  // Mettez à jour la conversation avec le dernier message envoyé
+  await FirebaseFirestore.instance.collection('conversations').doc(conversationId).update({
+    'lastMessage': 'Ce tuteur a accepté votre demande de rendez-vous',
+    'timestamp': FieldValue.serverTimestamp(),
+  });
+}
 
-        preferredDocs.sort((a, b) => b['Timestamp'].toDate().compareTo(a['Timestamp'].toDate()));
-        // Combiner les deux listes, en affichant d'abord les posts préférés
-        documents = [...preferredDocs, ...otherDocs];
 
-        return ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: documents.length,
-          itemBuilder: (context, index) {
-            final doc = documents[index];
-            final title = doc['Titre'] ?? 'Titre indisponible';
-            final content = doc['Contenu'] ?? 'Contenu indisponible';
-            final postImagePath = doc['Image'] ?? '';
-            final tags = List<String>.from(doc['Tags'] ?? []);
-            final publishedBy = doc['PublishedBy'] ?? ''; // Nom du champ qui contient l'ID de l'utilisateur
+  void _refuseAppointment(
+      String appointmentId, Map<String, dynamic> appointmentData) {
+    FirebaseFirestore.instance.collection('Rendezvousrefuses').add({
+      ...appointmentData,
+      'RefusedBy': userId // Ajoutez l'ID du tuteur qui refuse le rendez-vous
+    });
+    FirebaseFirestore.instance
+        .collection('Rendezvous')
+        .doc(appointmentId)
+        .delete();
+  }
 
-            return FutureBuilder<DocumentSnapshot>(
-              future: FirebaseFirestore.instance.collection('Users').doc(publishedBy).get(),
-              builder: (context, userSnapshot) {
-                if (userSnapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+  void _navigateToAcceptedAppointments(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentUserId = prefs.getString('userId');
+    if (currentUserId != null) {
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              AcceptedAppointmentsPage(userId: currentUserId),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            var begin = Offset.zero;
+            var end = Offset.zero;
+            var curve = Curves.ease;
+            var tween =
+                Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
 
-                if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
-                  return const SizedBox.shrink(); // Gérer le cas où l'utilisateur n'existe pas
-                }
-
-                final userData = userSnapshot.data!;
-                final userImage = userData['Image'] ?? '';
-                final name = userData['Prénom'] ?? '';
-                final annee = userData['Annee'] ?? '';
-                final docId = doc.id;
-
-                return _buildPost(
-                  docId.toString(),
-                  title.toString(),
-                  content.toString(),
-                  postImagePath.toString(),
-                  userImage.toString(),
-                  tags,
-                  name.toString(),
-                  annee.toString(),
-                );
-              },
+            return SlideTransition(
+              position: animation.drive(tween),
+              child: child,
             );
           },
-        );
-      },
-    );
+        ),
+      );
+    }
   }
 
-  Widget _buildPost(
-      String PostId,
-      String title,
-      String content,
-      String postImagePath,
-      String userImage,
-      List<String> tags,
-      String name,
-      String annee) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => PostDetailPage(
-              postId: PostId,
-              title: title,
-              content: content,
-              postImagePath: postImagePath,
-              userImage: userImage,
-              tags: tags,
-              name: name,
-              annee: annee,
-            ),
-          ),
-        );
-      },
-      child: Container(
-        margin: const EdgeInsets.all(10),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.grey.withOpacity(0.2),
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: const [
-            BoxShadow(
-              color: ui.Color.fromARGB(255, 87, 87, 87),
-              blurRadius: 5.0,
-              offset: Offset(0, 5),
-            ),
-            BoxShadow(
-              color: ui.Color.fromARGB(255, 87, 87, 87),
-              offset: Offset(0, 0),
-            ),
-            BoxShadow(
-              color: ui.Color.fromARGB(255, 255, 255, 255),
-              offset: Offset(5, 0),
-            ),
-          ],
+  void _navigateToRefusedAppointments(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentUserId = prefs.getString('userId');
+    if (currentUserId != null) {
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              RefusedAppointmentsPage(userId: currentUserId),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            var begin = Offset.zero;
+            var end = Offset.zero;
+            var curve = Curves.ease;
+            var tween =
+                Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+
+            return SlideTransition(
+              position: animation.drive(tween),
+              child: child,
+            );
+          },
         ),
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Center(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        color: Colors.black,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    content,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (postImagePath.isNotEmpty)
-                    Align(
-                      alignment: Alignment.centerRight,
+      );
+    }
+  }
+}
+
+class AcceptedAppointmentsPage extends StatelessWidget {
+  final String userId;
+  const AcceptedAppointmentsPage({super.key, required this.userId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Rendez-vous acceptés'),
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
+        backgroundColor: const Color(0xFF5F67EA),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+        ),
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('Rendezvousacceptes')
+            .where('AcceptedBy', isEqualTo: userId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final acceptedAppointments = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: acceptedAppointments.length,
+            itemBuilder: (context, index) {
+              final appointment = acceptedAppointments[index];
+              return FutureBuilder<DocumentSnapshot>(
+                  future: FirebaseFirestore.instance
+                      .collection('Users')
+                      .doc(appointment['InitiatedBy'])
+                      .get(),
+                  builder: (context, userSnapshot) {
+                    if (!userSnapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final user = userSnapshot.data;
+                    final userName = user?['Prénom'] ?? 'Prénom inconnu';
+
+                    return Padding(
+                      padding: const EdgeInsets.all(8.0),
                       child: Container(
-                        margin: const EdgeInsets.only(right: 0),
-                        child: Image.network(
-                          postImagePath,
-                          width: 500, // Ajustez la largeur de l'image selon vos besoins
-                          height: 200, // Ajustez la hauteur de l'image selon vos besoins
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: ListTile(
+                          title: Text(userName),
+                          titleTextStyle: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Matière: ${appointment['Matiere']}'),
+                              Text('Date: ${appointment['Date']}'),
+                              Text('Heure: ${appointment['Time']}'),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  const SizedBox(height: 8),
-                ],
-              ),
-            ),
-            Positioned(
-              top: 10,
-              right: 10,
-              child: CircleAvatar(
-                backgroundImage:
-                    userImage.isNotEmpty ? NetworkImage(userImage) : null,
-                radius: 20,
-                child: userImage.isEmpty ? const Icon(Icons.person) : null,
-              ),
-            ),
-            Positioned(
-              left: 0,
-              bottom: 0,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: tags.map((tag) {
-                  return Text(
-                    '#$tag', // Ajoutez un symbole hashtag devant chaque tag
-                    style: const TextStyle(
-                      fontSize: 10, // Réduisez la taille du texte selon vos besoins
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ],
+                    );
+                  });
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class RefusedAppointmentsPage extends StatelessWidget {
+  final String userId;
+  const RefusedAppointmentsPage({super.key, required this.userId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Rendez-vous refusés'),
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
         ),
+        backgroundColor: const Color(0xFF5F67EA),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+        ),
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('Rendezvousrefuses')
+            .where('RefusedBy', isEqualTo: userId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final refusedAppointments = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: refusedAppointments.length,
+            itemBuilder: (context, index) {
+              final appointment = refusedAppointments[index];
+              return FutureBuilder<DocumentSnapshot>(
+                  future: FirebaseFirestore.instance
+                      .collection('Users')
+                      .doc(appointment['InitiatedBy'])
+                      .get(),
+                  builder: (context, userSnapshot) {
+                    if (!userSnapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    final user = userSnapshot.data;
+                    final userName = user?['Prénom'] ?? 'Prénom inconnu';
+
+                    return Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: ListTile(
+                          title: Text(userName),
+                          titleTextStyle: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Matière: ${appointment['Matiere']}'),
+                              Text('Date: ${appointment['Date']}'),
+                              Text('Heure: ${appointment['Time']}'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  });
+            },
+          );
+        },
       ),
     );
   }
